@@ -20,6 +20,10 @@ type LockServer struct {
 
 	// for each lock name, is it locked?
 	locks map[string]bool
+
+	// For each lock, which RPC call locked it?
+	lockers map[string]int64
+	unlockers map[string]int64
 }
 
 //
@@ -32,15 +36,30 @@ func (ls *LockServer) Lock(args *LockArgs, reply *LockReply) error {
 	defer ls.mu.Unlock()
 
 	locked, _ := ls.locks[args.Lockname]
+	lockerId, _ := ls.lockers[args.Lockname]
+	myId := "Secondary"
+	if ls.am_primary {myId = "Primary"}
+	log.Printf("LOCK[%s] from: %d on %s. Forwarded: %t", args.Lockname, args.CallerId, myId, args.IsForwarded)
 
-	if locked {
-		reply.OK = false
+	if locked && args.CallerId != lockerId {
+		if args.CallerId == lockerId {
+			// The caller is the one who originally unlocked it. Either a replay or a dupe.
+			// Treat as a re-entrant lock I suppose
+			reply.OK = true
+		} else {
+			reply.OK = false
+		}
 	} else {
+		log.Printf("LOCKING[%s] on %s.", args.Lockname, myId)
 		reply.OK = true
+		// Both place the lock and set the CallerId
 		ls.locks[args.Lockname] = true
+		ls.lockers[args.Lockname] = args.CallerId
 
 		if ls.am_primary {
+			// TODO: This is causing failure on slave ??
 			var slaveReply LockReply
+			args.IsForwarded = true
 			// Forward request to backup
 			ok := call(ls.backup, "LockServer.Lock", args, &slaveReply)
 			if ok == false {
@@ -60,21 +79,34 @@ func (ls *LockServer) Unlock(args *UnlockArgs, reply *UnlockReply) error {
 	defer ls.mu.Unlock()
 
 	locked, _ := ls.locks[args.Lockname]
+	lockerId, _ := ls.unlockers[args.Lockname]
+	myId := "Secondary"
+	if ls.am_primary {myId = "Primary"}
+	log.Printf("UNLOCK[%s] from: %d on %s. Forwarded: %t", args.Lockname, args.CallerId, myId, args.IsForwarded)
 
 	// Unlock is only valid if the lock was previously locked. If that is not the case, return an error
-	if locked {
-		reply.OK = true
+	if locked && args.CallerId != lockerId {
+		log.Printf("UNLOCKING[%s] on %s.", args.Lockname, myId)
 		ls.locks[args.Lockname] = false
+		ls.unlockers[args.Lockname] = args.CallerId
 		if ls.am_primary {
 			var slaveReply UnlockReply
 			// Forward request to backup
+			args.IsForwarded = true
 			ok := call(ls.backup, "LockServer.Unlock", args, &slaveReply)
 			if ok == false {
 				ls.am_primary = false //Slave went down, stop forwarding requests to it
 			}
 		}
+		reply.OK = true
 	} else {
-		reply.OK = false
+		if args.CallerId == lockerId {
+			// The caller is the one who originally unlocked it. Either a replay or a dupe.
+			// Treat as a re-entrant lock I suppose
+			reply.OK = true
+		} else {
+			reply.OK = false
+		}
 	}
 
 	return nil
@@ -116,6 +148,8 @@ func StartServer(primary string, backup string, am_primary bool) *LockServer {
 	ls.backup = backup
 	ls.am_primary = am_primary
 	ls.locks = map[string]bool{}
+	ls.lockers = map[string]int64{}
+	ls.unlockers = map[string]int64{}
 
 	// Your initialization code here.
 

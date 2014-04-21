@@ -1,6 +1,8 @@
 package lockservice
 
 import "net/rpc"
+import "crypto/rand"
+import "math/big"
 
 //
 // the lockservice Clerk lives in the client
@@ -17,6 +19,13 @@ func MakeClerk(primary string, backup string) *Clerk {
 	ck.servers[1] = backup
 	// Your initialization code here.
 	return ck
+}
+
+func nrand() int64 {
+	max := big.NewInt(int64(1) << 62)
+	bigx, _ := rand.Int(rand.Reader, max)
+	x := bigx.Int64()
+	return x
 }
 
 //
@@ -61,6 +70,7 @@ func (ck *Clerk) Lock(lockname string) bool {
 	// prepare the arguments.
 	args := &LockArgs{}
 	args.Lockname = lockname
+	args.CallerId = nrand()
 	var reply LockReply
 
 	// send an RPC request, wait for the reply.
@@ -86,6 +96,7 @@ func (ck *Clerk) Lock(lockname string) bool {
 func (ck *Clerk) Unlock(lockname string) bool {
 	args := &UnlockArgs{}
 	args.Lockname = lockname
+	args.CallerId = nrand()
 	var reply UnlockReply
 
 	// send an RPC request, wait for the reply.
