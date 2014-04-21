@@ -66,7 +66,12 @@ func (ck *Clerk) Lock(lockname string) bool {
 	// send an RPC request, wait for the reply.
 	ok := call(ck.servers[0], "LockServer.Lock", args, &reply)
 	if ok == false {
-		return false
+		// Attempt to send to backup!
+		ok = call(ck.servers[1], "LockServer.Lock", args, &reply)
+		if ok == false {
+			// We're really screwed, neither the server nor the client returned anything
+			return false
+		}
 	}
 
 	return reply.OK
@@ -86,7 +91,11 @@ func (ck *Clerk) Unlock(lockname string) bool {
 	// send an RPC request, wait for the reply.
 	ok := call(ck.servers[0], "LockServer.Unlock", args, &reply)
 	if ok == false {
-		return false
+		// Attempt to send to backup!
+		ok := call(ck.servers[1], "LockServer.Unlock", args, &reply)
+		if ok == false {
+			return false
+		}
 	}
 
 	return reply.OK
