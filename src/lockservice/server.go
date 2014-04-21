@@ -24,6 +24,9 @@ type LockServer struct {
 	// For each lock, which RPC call locked it?
 	lockers map[string]int64
 	unlockers map[string]int64
+
+	lockTime map[string]int64 //Make sure events don't happen out of order
+	unlockTime map[string]int64
 }
 
 //
@@ -37,11 +40,18 @@ func (ls *LockServer) Lock(args *LockArgs, reply *LockReply) error {
 
 	locked, _ := ls.locks[args.Lockname]
 	lockerId, _ := ls.lockers[args.Lockname]
+	unlockTime, _ := ls.unlockTime[args.Lockname]
 	myId := "Secondary"
 	if ls.am_primary {myId = "Primary"}
-	log.Printf("LOCK[%s] from: %d on %s. Forwarded: %t", args.Lockname, args.CallerId, myId, args.IsForwarded)
-
-	if locked && args.CallerId != lockerId {
+	// The first time a slave sees a non-forwarded packet, it should wait.
+	// This way, clerks have the opportunity to failover
+	//if !ls.am_primary && !args.IsForwarded && !ls.slaveWaited {
+	//	time.Sleep(4 * time.Second) // Grace period for Clerks to failover
+	//	ls.slaveWaited = true // We only need to wait once
+	//}
+	log.Printf("LOCK[%s] from: %d on %s at %d. Forwarded: %t", args.Lockname, args.CallerId, myId, args.Tstamp, args.IsForwarded)
+	// If it's locked but a retransmission we don't care. If it's too early, that's bad though.
+	if (locked && args.CallerId != lockerId) || args.Tstamp <= unlockTime {
 		if args.CallerId == lockerId {
 			// The caller is the one who originally unlocked it. Either a replay or a dupe.
 			// Treat as a re-entrant lock I suppose
@@ -55,9 +65,9 @@ func (ls *LockServer) Lock(args *LockArgs, reply *LockReply) error {
 		// Both place the lock and set the CallerId
 		ls.locks[args.Lockname] = true
 		ls.lockers[args.Lockname] = args.CallerId
+		ls.lockTime[args.Lockname] = args.Tstamp
 
 		if ls.am_primary {
-			// TODO: This is causing failure on slave ??
 			var slaveReply LockReply
 			args.IsForwarded = true
 			// Forward request to backup
@@ -80,15 +90,24 @@ func (ls *LockServer) Unlock(args *UnlockArgs, reply *UnlockReply) error {
 
 	locked, _ := ls.locks[args.Lockname]
 	lockerId, _ := ls.unlockers[args.Lockname]
+	lockTime, _ := ls.lockTime[args.Lockname]
 	myId := "Secondary"
 	if ls.am_primary {myId = "Primary"}
-	log.Printf("UNLOCK[%s] from: %d on %s. Forwarded: %t", args.Lockname, args.CallerId, myId, args.IsForwarded)
+	// The first time a slave sees a non-forwarded packet, it should wait.
+	// This way, clerks have the opportunity to failover
+	//if !args.IsForwarded && !ls.slaveWaited {
+	//	time.Sleep(4 * time.Second) // Grace period for Clerks to failover
+	//	ls.slaveWaited = true // We only need to wait once
+	//}
+	log.Printf("UNLOCK[%s] from: %d on %s at %d. Forwarded: %t", args.Lockname, args.CallerId, myId, args.Tstamp, args.IsForwarded)
 
 	// Unlock is only valid if the lock was previously locked. If that is not the case, return an error
-	if locked && args.CallerId != lockerId {
+	// If (lock is locked and not a replay) and valid time stamp
+	if (locked && args.CallerId != lockerId) && args.Tstamp >= lockTime {
 		log.Printf("UNLOCKING[%s] on %s.", args.Lockname, myId)
 		ls.locks[args.Lockname] = false
 		ls.unlockers[args.Lockname] = args.CallerId
+		ls.unlockTime[args.Lockname] = args.Tstamp
 		if ls.am_primary {
 			var slaveReply UnlockReply
 			// Forward request to backup
@@ -150,6 +169,8 @@ func StartServer(primary string, backup string, am_primary bool) *LockServer {
 	ls.locks = map[string]bool{}
 	ls.lockers = map[string]int64{}
 	ls.unlockers = map[string]int64{}
+	ls.lockTime = map[string]int64{}
+	ls.unlockTime = map[string]int64{}
 
 	// Your initialization code here.
 

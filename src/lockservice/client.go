@@ -3,6 +3,7 @@ package lockservice
 import "net/rpc"
 import "crypto/rand"
 import "math/big"
+import "time"
 
 //
 // the lockservice Clerk lives in the client
@@ -71,12 +72,15 @@ func (ck *Clerk) Lock(lockname string) bool {
 	args := &LockArgs{}
 	args.Lockname = lockname
 	args.CallerId = nrand()
+	args.Tstamp = time.Now().UnixNano()
 	var reply LockReply
 
 	// send an RPC request, wait for the reply.
 	ok := call(ck.servers[0], "LockServer.Lock", args, &reply)
 	if ok == false {
 		// Attempt to send to backup!
+		args.IsForwarded = true // Treating failover packets as forwarded gives them priority
+		ck.servers[0] = ck.servers[0] // Make secondary server the primary
 		ok = call(ck.servers[1], "LockServer.Lock", args, &reply)
 		if ok == false {
 			// We're really screwed, neither the server nor the client returned anything
@@ -97,12 +101,15 @@ func (ck *Clerk) Unlock(lockname string) bool {
 	args := &UnlockArgs{}
 	args.Lockname = lockname
 	args.CallerId = nrand()
+	args.Tstamp = time.Now().UnixNano()
 	var reply UnlockReply
 
 	// send an RPC request, wait for the reply.
 	ok := call(ck.servers[0], "LockServer.Unlock", args, &reply)
 	if ok == false {
 		// Attempt to send to backup!
+		args.IsForwarded = true // Treating failover packets as forwarded gives them priority
+		ck.servers[0] = ck.servers[0] // Make secondary server the primary
 		ok := call(ck.servers[1], "LockServer.Unlock", args, &reply)
 		if ok == false {
 			return false

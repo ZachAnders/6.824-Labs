@@ -16,6 +16,7 @@ type LockArgs struct {
 	Lockname string // lock name
 	CallerId int64
 	IsForwarded bool
+	Tstamp int64
 }
 
 type LockReply struct {
@@ -30,6 +31,7 @@ type UnlockArgs struct {
 	Lockname string
 	CallerId int64
 	IsForwarded bool
+	Tstamp int64
 }
 
 type UnlockReply struct {
