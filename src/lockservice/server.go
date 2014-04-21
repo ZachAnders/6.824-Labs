@@ -47,8 +47,18 @@ func (ls *LockServer) Lock(args *LockArgs, reply *LockReply) error {
 // server Unlock RPC handler.
 //
 func (ls *LockServer) Unlock(args *UnlockArgs, reply *UnlockReply) error {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
 
-	// Your code here.
+	locked, _ := ls.locks[args.Lockname]
+
+	// Unlock is only valid if the lock was previously locked. If that is not the case, return an error
+	if locked {
+		reply.OK = true
+		ls.locks[args.Lockname] = false
+	} else {
+		reply.OK = false
+	}
 
 	return nil
 }
