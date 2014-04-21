@@ -38,6 +38,15 @@ func (ls *LockServer) Lock(args *LockArgs, reply *LockReply) error {
 	} else {
 		reply.OK = true
 		ls.locks[args.Lockname] = true
+
+		if ls.am_primary {
+			var slaveReply LockReply
+			// Forward request to backup
+			ok := call(ls.backup, "LockServer.Lock", args, &slaveReply)
+			if ok == false {
+				ls.am_primary = false //Slave went down, stop forwarding requests to it
+			}
+		}
 	}
 
 	return nil
@@ -56,6 +65,14 @@ func (ls *LockServer) Unlock(args *UnlockArgs, reply *UnlockReply) error {
 	if locked {
 		reply.OK = true
 		ls.locks[args.Lockname] = false
+		if ls.am_primary {
+			var slaveReply UnlockReply
+			// Forward request to backup
+			ok := call(ls.backup, "LockServer.Unlock", args, &slaveReply)
+			if ok == false {
+				ls.am_primary = false //Slave went down, stop forwarding requests to it
+			}
+		}
 	} else {
 		reply.OK = false
 	}
